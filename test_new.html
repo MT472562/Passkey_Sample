@@ -13,9 +13,21 @@
             justify-content: center;
             height: 100vh;
         }
+        .info {
+            background-color: #e1f5fe;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            max-width: 400px;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
+    <div class="info">
+        <p><strong>Discoverable Credentials対応</strong></p>
+        <p>登録後は、ユーザー名なしでログインできます！</p>
+    </div>
     <form>
         <input type="text" id="username" name="username" placeholder="ユーザー名" required>
         <button type="submit" id="submit">保存</button>
@@ -85,7 +97,7 @@
                 });
                 const verificationResult = await verificationResponse.json();
                 if (verificationResult.success) {
-                    alert('登録成功！');
+                    alert('登録成功！ユーザー名なしでログインできるようになりました。');
                 } else {
                     alert('登録失敗: ' + (verificationResult.error || '原因不明'));
                 }

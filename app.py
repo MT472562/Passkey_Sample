@@ -19,6 +19,7 @@ def new():
 @app.route('/login')
 def login():
     return render_template('test_login.html')
+
 @app.route('/api/new', methods=['POST'])
 def register_options():
     username = request.json.get("username")
@@ -39,7 +40,11 @@ def register_options():
         "pubKeyCredParams": [
             {"alg": -7, "type": "public-key"}
         ],
-        "authenticatorSelection": {"userVerification": "preferred"},
+        "authenticatorSelection": {
+            "userVerification": "preferred",
+            "residentKey": "required",  # Discoverable Credentialsを要求
+            "requireResidentKey": True  # 従来のブラウザとの互換性のため
+        },
         "timeout": 60000,
         "attestation": "direct"
     }
@@ -96,28 +101,24 @@ def register_verify():
     
 @app.route('/api/login/options', methods=['POST'])
 def login_options():
-    username = request.json.get("username")
-    user = users.get(username)
-
-    if not user:
-        return jsonify({"error": "ユーザーが存在しません"}), 400
+    # Discoverable Credentialsの場合、usernameは不要
+    # ただし、既存のUIとの互換性のため、受け取りは可能にしておく
+    username = request.json.get("username", "")
 
     challenge = os.urandom(32)
     challenge_b64url = base64.urlsafe_b64encode(challenge).rstrip(b'=').decode()
     session["challenge"] = challenge
-    session["username"] = username
+    if username:
+        session["username"] = username
 
     options = {
         "challenge": challenge_b64url,
         "timeout": 60000,
         "rpId": "localhost",
         "userVerification": "preferred",
-        "allowCredentials": [
-            {
-                "type": "public-key",
-                "id": base64.urlsafe_b64encode(user["credential_id"]).rstrip(b'=').decode()
-            }
-        ]
+        # Discoverable Credentialsでは allowCredentials を空にする
+        # これにより認証器が保存されているクレデンシャルから適切なものを選択する
+        "allowCredentials": []
     }
     return jsonify(options)
 
@@ -126,16 +127,26 @@ def login_verify():
     import json
     data = request.get_json()
     credential = data.get("credential")
-    username = data.get("username")
-
-    if not credential or not username:
-        return jsonify({"success": False, "error": "データが不足しています"})
-
-    user = users.get(username)
-    if not user:
-        return jsonify({"success": False, "error": "ユーザーが存在しません"})
+    
+    if not credential:
+        return jsonify({"success": False, "error": "クレデンシャルが不足しています"})
 
     expected_challenge = session.get("challenge")
+
+    # Discoverable Credentialsの場合、credential_idからユーザーを特定
+    credential_id = base64.urlsafe_b64decode(credential["id"] + "==")
+    
+    # 登録されているユーザーからマッチするクレデンシャルIDを探す
+    username = None
+    user = None
+    for stored_username, stored_user in users.items():
+        if stored_user["credential_id"] == credential_id:
+            username = stored_username
+            user = stored_user
+            break
+    
+    if not user:
+        return jsonify({"success": False, "error": "クレデンシャルが見つかりません"})
 
     try:
         verification = verify_authentication_response(
@@ -146,17 +157,39 @@ def login_verify():
             credential_public_key=user["public_key"],
             credential_current_sign_count=user["sign_count"],
             require_user_verification=True
-            # Remove the credential_id parameter as it's not accepted by this function
         )
 
         # サインカウント更新
         users[username]["sign_count"] = verification.new_sign_count
+        
+        # セッションにユーザー名を保存
+        session["username"] = username
 
-        return jsonify({"success": True})
+        return jsonify({"success": True, "username": username})
 
     except Exception as e:
         import traceback
         traceback.print_exc()
         return jsonify({"success": False, "error": str(e)})
+
+@app.route('/api/login/discoverable', methods=['POST'])
+def login_discoverable():
+    """
+    Discoverable Credentials専用のログインエンドポイント
+    ユーザー名を指定せずにログインする
+    """
+    challenge = os.urandom(32)
+    challenge_b64url = base64.urlsafe_b64encode(challenge).rstrip(b'=').decode()
+    session["challenge"] = challenge
+
+    options = {
+        "challenge": challenge_b64url,
+        "timeout": 60000,
+        "rpId": "localhost",
+        "userVerification": "preferred",
+        "allowCredentials": []  # 空の配列でDiscoverable Credentialsを使用
+    }
+    return jsonify(options)
+
 if __name__ == '__main__':
     app.run(debug=True, port=9200, host='0.0.0.0')

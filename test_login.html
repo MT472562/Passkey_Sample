@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>パスキーログイン</title>
+    <style>
+        body {
+            font-family: sans-serif;
+            background-color: #f0f4f8;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+        }
+        .btn {
+            display: inline-block;
+            margin: 10px;
+            padding: 12px 24px;
+            background-color: #4f46e5;
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: background-color 0.3s;
+        }
+        .btn:hover {
+            background-color: #3730a3;
+        }
+    </style>
+</head>
+<body>
+    <form>
+        <input type="text" id="username" name="username" placeholder="ユーザー名" required>
+        <button type="submit" id="loginBtn">ログイン</button>
+    </form>
+    <a href="/" class="btn">メニューへ戻る</a>
+    <script>
+        function base64urlToUint8Array(base64urlString) {
+            let base64 = base64urlString.replace(/-/g, '+').replace(/_/g, '/');
+            while (base64.length % 4 !== 0) base64 += '=';
+            const str = atob(base64);
+            const bytes = new Uint8Array(str.length);
+            for (let i = 0; i < str.length; ++i) bytes[i] = str.charCodeAt(i);
+            return bytes;
+        }
+        function uint8ArrayToBase64url(bytes) {
+            let str = '';
+            for (let i = 0; i < bytes.length; ++i) str += String.fromCharCode(bytes[i]);
+            let base64 = btoa(str);
+            return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        }
+
+        document.getElementById('loginBtn').addEventListener('click', async function(event) {
+            event.preventDefault();
+            const username = document.getElementById('username').value;
+            if (!username) {
+                alert('ユーザー名を入力してください。');
+                return;
+            }
+
+            try {
+                // サーバーにチャレンジとcredentialIdをリクエスト
+                const optionsResponse = await fetch('/api/login/options', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ username })
+                });
+                const options = await optionsResponse.json();
+
+                if (!options.allowCredentials || !options.challenge) {
+                    alert('登録情報が見つかりません。');
+                    return;
+                }
+
+                // challenge, allowCredentials.idをデコード
+                options.challenge = base64urlToUint8Array(options.challenge);
+                options.allowCredentials = options.allowCredentials.map(cred => ({
+                    ...cred,
+                    id: base64urlToUint8Array(cred.id)
+                }));
+
+                // WebAuthn認証
+                const assertion = await navigator.credentials.get({ publicKey: options });
+
+                // サーバーへ認証データ送信
+                const assertionForServer = {
+                    id: assertion.id,
+                    type: assertion.type,
+                    rawId: uint8ArrayToBase64url(new Uint8Array(assertion.rawId)),
+                    response: {
+                        clientDataJSON: uint8ArrayToBase64url(new Uint8Array(assertion.response.clientDataJSON)),
+                        authenticatorData: uint8ArrayToBase64url(new Uint8Array(assertion.response.authenticatorData)),
+                        signature: uint8ArrayToBase64url(new Uint8Array(assertion.response.signature)),
+                        userHandle: assertion.response.userHandle
+                            ? uint8ArrayToBase64url(new Uint8Array(assertion.response.userHandle))
+                            : null,
+                    },
+                };
+
+                const verifyResponse = await fetch('/api/login/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ credential: assertionForServer, username })
+                });
+                const verifyResult = await verifyResponse.json();
+                if (verifyResult.success) {
+                    alert('ログイン成功！');
+                } else {
+                    alert('ログイン失敗: ' + (verifyResult.error || '原因不明'));
+                }
+            } catch (err) {
+                console.error(err);
+                alert('エラーが発生しました。コンソールを確認してください。');
+            }
+        });
+    </script>
+</body>
+</html>

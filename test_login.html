@@ -13,6 +13,15 @@
             justify-content: center;
             height: 100vh;
         }
+        .login-section {
+            background-color: white;
+            padding: 30px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            margin: 10px;
+            min-width: 300px;
+            text-align: center;
+        }
         .btn {
             display: inline-block;
             margin: 10px;
@@ -23,18 +32,46 @@
             border-radius: 8px;
             font-size: 16px;
             transition: background-color 0.3s;
+            border: none;
+            cursor: pointer;
+            width: 100%;
         }
         .btn:hover {
             background-color: #3730a3;
         }
+        .btn-passwordless {
+            background-color: #059669;
+        }
+        .btn-passwordless:hover {
+            background-color: #047857;
+        }
+        .divider {
+            margin: 20px 0;
+            text-align: center;
+            color: #6b7280;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            margin: 10px 0;
+            border: 1px solid #d1d5db;
+            border-radius: 6px;
+            font-size: 16px;
+            box-sizing: border-box;
+        }
     </style>
 </head>
 <body>
-    <form>
-        <input type="text" id="username" name="username" placeholder="ユーザー名" required>
-        <button type="submit" id="loginBtn">ログイン</button>
-    </form>
-    <a href="/" class="btn">メニューへ戻る</a>
+    <!-- Discoverable Credentials ログイン -->
+    <div class="login-section">
+        <h2>🔐 パスワードレスログイン</h2>
+        <p>ユーザー名入力不要！</p>
+        <button id="passwordlessBtn" class="btn btn-passwordless">パスキーでログイン</button>
+    </div>
+
+
+    <a href="/" class="btn" style="background-color: #6b7280; width: auto;">メニューへ戻る</a>
+
     <script>
         function base64urlToUint8Array(base64urlString) {
             let base64 = base64urlString.replace(/-/g, '+').replace(/_/g, '/');
@@ -51,6 +88,69 @@
             return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
         }
 
+        // パスワードレスログイン（Discoverable Credentials）
+        document.getElementById('passwordlessBtn').addEventListener('click', async function(event) {
+            event.preventDefault();
+            
+            try {
+                // Discoverable Credentials用のオプション取得
+                const optionsResponse = await fetch('/api/login/discoverable', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                });
+                const options = await optionsResponse.json();
+
+                if (!options.challenge) {
+                    alert('サーバーエラーが発生しました。');
+                    return;
+                }
+
+                // challengeをデコード
+                options.challenge = base64urlToUint8Array(options.challenge);
+
+                console.log('【パスワードレス】WebAuthn開始');
+
+                // WebAuthn認証（allowCredentialsは空なので認証器が自動選択）
+                const assertion = await navigator.credentials.get({ publicKey: options });
+
+                // サーバーへ認証データ送信
+                const assertionForServer = {
+                    id: assertion.id,
+                    type: assertion.type,
+                    rawId: uint8ArrayToBase64url(new Uint8Array(assertion.rawId)),
+                    response: {
+                        clientDataJSON: uint8ArrayToBase64url(new Uint8Array(assertion.response.clientDataJSON)),
+                        authenticatorData: uint8ArrayToBase64url(new Uint8Array(assertion.response.authenticatorData)),
+                        signature: uint8ArrayToBase64url(new Uint8Array(assertion.response.signature)),
+                        userHandle: assertion.response.userHandle
+                            ? uint8ArrayToBase64url(new Uint8Array(assertion.response.userHandle))
+                            : null,
+                    },
+                };
+
+                const verifyResponse = await fetch('/api/login/verify', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ credential: assertionForServer })
+                });
+                const verifyResult = await verifyResponse.json();
+                
+                if (verifyResult.success) {
+                    alert(`パスワードレスログイン成功！\nユーザー: ${verifyResult.username || '不明'}`);
+                } else {
+                    alert('ログイン失敗: ' + (verifyResult.error || '原因不明'));
+                }
+            } catch (err) {
+                console.error(err);
+                if (err.name === 'NotAllowedError') {
+                    alert('認証がキャンセルされました。');
+                } else {
+                    alert('エラーが発生しました: ' + err.message);
+                }
+            }
+        });
+
+        // 従来のユーザー名指定ログイン
         document.getElementById('loginBtn').addEventListener('click', async function(event) {
             event.preventDefault();
             const username = document.getElementById('username').value;
@@ -68,17 +168,21 @@
                 });
                 const options = await optionsResponse.json();
 
-                if (!options.allowCredentials || !options.challenge) {
+                if (!options.challenge) {
                     alert('登録情報が見つかりません。');
                     return;
                 }
 
-                // challenge, allowCredentials.idをデコード
+                // challengeをデコード
                 options.challenge = base64urlToUint8Array(options.challenge);
-                options.allowCredentials = options.allowCredentials.map(cred => ({
-                    ...cred,
-                    id: base64urlToUint8Array(cred.id)
-                }));
+                
+                // allowCredentialsが空でない場合のみデコード（従来との互換性）
+                if (options.allowCredentials && options.allowCredentials.length > 0) {
+                    options.allowCredentials = options.allowCredentials.map(cred => ({
+                        ...cred,
+                        id: base64urlToUint8Array(cred.id)
+                    }));
+                }
 
                 // WebAuthn認証
                 const assertion = await navigator.credentials.get({ publicKey: options });
